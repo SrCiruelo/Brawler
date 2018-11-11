@@ -1,0 +1,202 @@
+using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+
+public class My_Rigidbody_2D : MonoBehaviour {
+
+    // Use this for initialization
+    private Rigidbody2D my_rigid;
+    [SerializeField]
+    private float gravity_mod= 1f;
+
+    
+    private float horizontal;
+    private float vertical;
+    
+    [SerializeField]
+    private float speed;
+
+    private RaycastHit2D[] hit_buffer = new RaycastHit2D[32];
+
+    [SerializeField]
+    private float min_move_distance = 0.001f;
+    [SerializeField]
+    [Tooltip("This variable is used to cast the collider further the direction we want to move so we make sure it won't enter into another collision with 0.01 IS FINE")]
+    private float distance_shell = 0.01f;
+    [Tooltip("This number tells difference between being grounded in a slightly tilted ramp and highly tilted ramp. The higher the number is the less tilted the ramp will be . GOTTA BE MORE LESS THAN ONE ALWAYS")]
+    [SerializeField]
+    private float min_ground_normal_Y = 0.65f;
+
+
+    [HideInInspector]
+    public Vector2 velocity;
+    [HideInInspector]
+    public Vector2 movement_velocity;
+    [HideInInspector]
+    public Vector2 external_forces_velocity;
+    [HideInInspector]
+    public Vector2 gravity_force_velocity;
+
+    private Vector2 normal;
+
+    private ContactFilter2D my_contact_filter;
+    private PhysicsMaterial2D ground_material;
+    private PhysicsMaterial2D my_material;
+    [SerializeField]
+    private Vector2 my_vel;
+    public bool grounded { get; private set; }
+
+    private int default_layer;
+
+
+    private bool explosion_request = false;
+
+    void Start () {
+        my_rigid = (Rigidbody2D)GetComponent(typeof(Rigidbody2D));
+        my_material = my_rigid.sharedMaterial;
+        //we tell the filter not to check collisions with triggers
+        my_contact_filter.useTriggers = false;
+        //we tell the filter to use the physics project settings layermask collisions
+        default_layer = (Physics2D.GetLayerCollisionMask(gameObject.layer));
+        my_contact_filter.SetLayerMask(default_layer);
+	}
+	
+	// Update is called once per frame
+	void Update () {
+        vertical = Input.GetAxisRaw("Vertical");
+        horizontal = Input.GetAxisRaw("Horizontal");
+        if (Input.GetKeyDown(KeyCode.Space)) explosion_request = true;
+	}
+    private void FixedUpdate()
+    {
+        grounded = false;
+        ground_material = null;
+        add_gravity();
+        add_movement_force(new Vector2(horizontal * speed, 0));
+        add_explosion_force(my_vel);
+        //velocity * Time.fixedDeltaTime converts velocity the vector to just direction vector in space
+        Move(velocity * Time.fixedDeltaTime,my_contact_filter);
+        add_friction();
+        if (horizontal == 0)
+        {
+            add_movement_force(-movement_velocity / Time.fixedDeltaTime);
+        }
+        print("  movement " + movement_velocity);
+        print("external " + external_forces_velocity);
+        print(" gravity " + gravity_force_velocity);
+    }
+    
+    private void Move(Vector2 move, ContactFilter2D _my_contact_filter)
+    {
+        float distance = move.magnitude;
+        int count = 0;
+        int layer = _my_contact_filter.layerMask.value;
+        print(layer);
+        if (distance > min_move_distance)
+        {
+            //Here we detect future possible overlaps 
+            count = my_rigid.Cast(move, _my_contact_filter, hit_buffer,distance_shell + distance);
+            Vector2[] all_normals = new Vector2[count];
+            // REVISAR ESTE CÓDIGO OPTIMIZAR
+            for (int i= 0; i <count; ++i)
+            {
+                Vector2 current_normal = hit_buffer[i].normal;
+                all_normals[i] = current_normal;
+                //layer |= hit_buffer[i].collider.gameObject.layer;
+
+                if (current_normal.y > min_ground_normal_Y)
+                {
+                    grounded = true;
+                }
+            }
+            if(grounded)
+            {
+                //Here we will change the gravity direction
+
+            }
+            //WHEN COLLIDING WITH 2 OBJECTS AT THE SAME TIME IT FAILS CAUSE WE NEED TO APPLY DIFFERENT NORMALS
+            //normal += normal* bounciness;
+            Debug.DrawRay(transform.position, velocity);
+            int cont = 0;
+            foreach(Vector2 i in all_normals)
+            {
+                Debug.DrawRay(hit_buffer[cont].point, i, Color.red);
+
+                float bounciness = 0;
+                ground_material = hit_buffer[cont].collider.sharedMaterial;
+                if (ground_material != null)
+                {
+                    bounciness = ground_material.bounciness;
+                }
+                Vector2 local_normal = hit_buffer[cont].normal.normalized;
+                normal = calculate_normal(local_normal, -velocity);
+
+                Vector2 gravity_normal = -calculate_normal(gravity_force_velocity, -local_normal);
+                gravity_force_velocity += (gravity_normal.normalized == gravity_force_velocity.normalized) ? Vector2.zero : gravity_normal;
+
+                Vector2 move_normal = -calculate_normal(movement_velocity, -local_normal);
+                movement_velocity += (move_normal.normalized == movement_velocity.normalized)?Vector2.zero:move_normal;
+
+                Vector2 external_normal = -calculate_normal(external_forces_velocity, -local_normal);
+                external_forces_velocity += (external_normal.normalized == external_forces_velocity.normalized) ? Vector2.zero : external_normal;
+
+
+                velocity += normal;
+                move = velocity * Time.fixedDeltaTime;
+                ++cont;
+
+            }
+        }
+        my_rigid.MovePosition(my_rigid.position + move);
+    }
+    private void add_gravity()
+    {
+        //Convert acceleration to velocity
+        Vector2 gravity = Physics2D.gravity * Time.fixedDeltaTime * gravity_mod;
+        velocity += gravity;
+        gravity_force_velocity += gravity;
+    }
+    private void add_friction()
+    {
+        // WE NEED TO DIVIDE IT IN CONTROL GRAVITY AND OTHER FORCES
+        if (ground_material != null)
+        {
+            velocity -= velocity * ground_material.friction;
+            gravity_force_velocity -= gravity_force_velocity * ground_material.friction;
+            movement_velocity -= movement_velocity * ground_material.friction;
+            external_forces_velocity -= external_forces_velocity * ground_material.friction;
+        }
+        else if(grounded)
+        {
+            velocity += -velocity * my_material.friction;
+            gravity_force_velocity -= gravity_force_velocity * my_material.friction;
+            movement_velocity -= movement_velocity * my_material.friction;
+            external_forces_velocity -= external_forces_velocity * my_material.friction;
+        }
+    }
+    private Vector2 calculate_normal(Vector2 direction, Vector2 total_normal)
+    {
+        Vector2 my_normal = direction.normalized * Vector2.Dot(direction, total_normal); 
+        return my_normal;
+    }
+    public void add_movement_force(Vector2 my_force)
+    {
+        Vector2 moving_acc = my_force * Time.fixedDeltaTime;
+        movement_velocity += moving_acc;
+        velocity += moving_acc;
+    }
+    public void add_movement_impulse(Vector2 my_force)
+    {
+
+    }
+    public void add_explosion_force(Vector2 my_force)
+    {
+        Vector2 moving_acc = my_force * Time.fixedDeltaTime;
+        external_forces_velocity += moving_acc;
+        velocity += moving_acc;
+    }
+    public void add_explosion_impulse(Vector2 my_force)
+    {
+
+    }
+}
